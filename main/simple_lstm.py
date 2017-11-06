@@ -1,87 +1,94 @@
 from keras.callbacks import EarlyStopping
 from keras.callbacks import ModelCheckpoint
-from keras.datasets import imdb
 from keras.layers import Dense
 from keras.layers import Embedding
 from keras.layers import LSTM
 from keras.models import Sequential
 from keras.models import load_model
-from keras.preprocessing import sequence
-
-from data_utils import shuffle_split
-
-
-def get_hyperparams():
-    return {
-        'seed': 11,
-        'top_words': 5000,
-        'max_word_length': 500,
-        'embedded_vector_length': 32,
-        'lstm_units': 100,
-        'batch_size': 64,
-        'epochs': 10,
-        'model_file': './imdb_lstm_model.hdf5'
-    }
+from imdb_data import load_data
+from hyperopt import STATUS_OK
 
 
-def load_data(hyperparams, fraction=1.0):
-    (x_train_original, y_train_original), (x_test_original, y_test_original) \
-        = imdb.load_data(num_words=hyperparams['top_words'])
+class SimpleImdbLstm():
+    """A holder for a trainable keras model with configurable hyperparameters.
+    """
 
-    # reduce size of training set for rapid prototyping
-    if fraction < 1.0:
-        (x_train, y_train), (x_extra, y_extra) = shuffle_split(x_train_original, y_train_original, fraction=fraction)
-    else:
-        (x_train, y_train) = (x_train_original, y_train_original)
+    def __init__(self, hyperparameters=None):
+        # Set default values. Can be overridden.
+        self.hyperparams = {
+            'seed': 11,
+            'top_words': 5000,
+            'max_word_length': 500,
+            'embedded_vector_length': 32,
+            'lstm_units': 100,
+            'batch_size': 64,
+            'epochs': 1,
+            'activation': 'sigmoid',
+            'optimizer': 'adam',
+            'loss': 'binary_crossentropy',
+            'monitor': 'val_loss',
+            'model_file': './simple_imdb_lstm_model.hdf5'
+        }
 
-    (x_valid, y_valid), (x_test, y_test) = shuffle_split(x_test_original, y_test_original, fraction=0.5)
-    max_word_length = hyperparams['max_word_length']
-    x_train = sequence.pad_sequences(x_train, maxlen=max_word_length)
-    x_valid = sequence.pad_sequences(x_valid, maxlen=max_word_length)
-    x_test = sequence.pad_sequences(x_test, maxlen=max_word_length)
-    return {'train_data': x_train,
-            'train_labels': y_train,
-            'valid_data': x_valid,
-            'valid_labels': y_valid,
-            'test_data': x_test,
-            'test_labels': y_test}
+        # override default hyperparams for any new values specified
+        if hyperparameters is not None:
+            self.hyperparams.update(hyperparameters)
 
+        self.set_seed()
 
-def create_model(hyperparams):
-    model = Sequential()
-    model.add(Embedding(hyperparams['top_words'],
-                        hyperparams['embedded_vector_length'],
-                        input_length=hyperparams['max_word_length']))
-    model.add(LSTM(hyperparams['lstm_units']))
-    model.add(Dense(1, activation='sigmoid'))
-    model.compile(optimizer='adam',
-                  loss='binary_crossentropy',
-                  metrics=['accuracy'])
-    return model
+    def set_seed(self):
+        """ Set the random seed for both tensorflow and theano backends
+            See: https://github.com/fchollet/keras/issues/2280 for details and limitations
+            also see: https://keras.io/getting-started/faq/#how-can-i-obtain-reproducible-results-using-keras-during-development
+        """
+        if 'seed' in self.hyperparams:
+            seed = self.hyperparams['seed']
+            import numpy as np
+            np.random.seed(seed)
+            import tensorflow as tf
+            tf.set_random_seed(seed)
+            import random as rn
+            rn.seed(seed)
+            import os
+            os.environ['PYTHONHASHSEED'] = str(seed)
+            os.environ['HYPEROPT_FMIN_SEED'] = str(seed)
+            if 'single_thread' in self.hyperparams and self.hyperparams['single_thread'] is True:
+                session_conf = tf.ConfigProto(intra_op_parallelism_threads=1, inter_op_parallelism_threads=1)
+                from keras import backend as K
+                sess = tf.Session(graph=tf.get_default_graph(), config=session_conf)
+                K.set_session(sess)
 
+    def create_model(self, hyperparams):
+        model = Sequential()
+        model.add(Embedding(hyperparams['top_words'],
+                            hyperparams['embedded_vector_length'],
+                            input_length=hyperparams['max_word_length']))
+        model.add(LSTM(hyperparams['lstm_units']))
+        model.add(Dense(1, activation=hyperparams['activation']))
+        model.compile(optimizer=hyperparams['optimizer'],
+                      loss=hyperparams['loss'],
+                      metrics=['accuracy'])
+        return model
 
-def train_model(hyperparams, model, data):
-    monitor = 'val_loss'
-    early_stopping = EarlyStopping(monitor=monitor, patience=1)
-    model_checkpoint = ModelCheckpoint(filepath=hyperparams['model_file'],
-                                       monitor=monitor,
-                                       save_best_only=True,
-                                       verbose=1)
-    model.fit(data['train_data'], data['train_labels'],
-              validation_data=(data['valid_data'], data['valid_labels']),
-              batch_size=hyperparams['batch_size'],
-              epochs=hyperparams['epochs'],
-              callbacks=[model_checkpoint, early_stopping])
-    return load_model(hyperparams['model_file'])
+    def objective(self, space):
+        data = load_data(space['top_words'], space['max_word_length'], fraction=0.01)
+        model = self.create_model(space)
 
+        early_stopping = EarlyStopping(monitor=space['monitor'], patience=1)
+        model_checkpoint = ModelCheckpoint(filepath=space['model_file'],
+                                           monitor=space['monitor'],
+                                           save_best_only=True,
+                                           verbose=1)
+        model.fit(data['train_data'], data['train_labels'],
+                  validation_data=(data['valid_data'], data['valid_labels']),
+                  batch_size=space['batch_size'],
+                  epochs=space['epochs'],
+                  callbacks=[model_checkpoint, early_stopping])
 
-def run_exp():
-    hyperparams = get_hyperparams()
-    data = load_data(hyperparams)
-    model = create_model(hyperparams)
-    trained_model = train_model(hyperparams, model, data)
-    scores = trained_model.evaluate(data['test_data'], data['test_labels'], verbose=0)
-    print('Accuracy: {}'.format(scores[1]*100))
+        best_model = load_model(space['model_file'])
+        print(best_model.metrics_names)
+        results = best_model.evaluate(data['valid_data'], data['valid_labels'], batch_size=2500)
+        loss = results[0]
+        acc = results[1]
+        return {'loss': loss, 'acc': acc, 'status': STATUS_OK}
 
-
-run_exp()

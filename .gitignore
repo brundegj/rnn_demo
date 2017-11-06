@@ -1,6 +1,6 @@
 .idea
 
-imdb_lstm_model.hdf5
+*.hdf5
 
 # Template .gitignore file from:
 # https://github.com/github/gitignore/blob/master/Python.gitignore
