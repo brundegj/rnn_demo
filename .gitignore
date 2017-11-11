@@ -1,6 +1,7 @@
 .idea
-
 *.hdf5
+*results.html
+
 
 # Template .gitignore file from:
 # https://github.com/github/gitignore/blob/master/Python.gitignore

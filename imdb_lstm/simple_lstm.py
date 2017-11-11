@@ -9,14 +9,13 @@ from imdb_data import load_data
 from hyperopt import STATUS_OK
 
 
-class SimpleImdbLstm():
+class SimpleImdbLstm:
     """A holder for a trainable keras model with configurable hyperparameters.
     """
 
     def __init__(self, hyperparameters=None):
         # Set default values. Can be overridden.
         self.hyperparams = {
-            'seed': 11,
             'top_words': 5000,
             'max_word_length': 500,
             'embedded_vector_length': 32,
@@ -27,40 +26,17 @@ class SimpleImdbLstm():
             'optimizer': 'adam',
             'loss': 'binary_crossentropy',
             'monitor': 'val_loss',
-            'model_file': './simple_imdb_lstm_model.hdf5'
+            'model_file': './simple_imdb_lstm_model.hdf5',
+            'data_fraction': 1.0
         }
 
         # override default hyperparams for any new values specified
         if hyperparameters is not None:
             self.hyperparams.update(hyperparameters)
 
-        self.set_seed()
-
-    def set_seed(self):
-        """ Set the random seed for both tensorflow and theano backends
-            See: https://github.com/fchollet/keras/issues/2280 for details and limitations
-            also see: https://keras.io/getting-started/faq/#how-can-i-obtain-reproducible-results-using-keras-during-development
-        """
-        if 'seed' in self.hyperparams:
-            seed = self.hyperparams['seed']
-            import numpy as np
-            np.random.seed(seed)
-            import tensorflow as tf
-            tf.set_random_seed(seed)
-            import random as rn
-            rn.seed(seed)
-            import os
-            os.environ['PYTHONHASHSEED'] = str(seed)
-            os.environ['HYPEROPT_FMIN_SEED'] = str(seed)
-            if 'single_thread' in self.hyperparams and self.hyperparams['single_thread'] is True:
-                session_conf = tf.ConfigProto(intra_op_parallelism_threads=1, inter_op_parallelism_threads=1)
-                from keras import backend as K
-                sess = tf.Session(graph=tf.get_default_graph(), config=session_conf)
-                K.set_session(sess)
-
     def create_model(self, hyperparams):
         model = Sequential()
-        model.add(Embedding(hyperparams['top_words'],
+        model.add(Embedding(int(hyperparams['top_words']),
                             hyperparams['embedded_vector_length'],
                             input_length=hyperparams['max_word_length']))
         model.add(LSTM(hyperparams['lstm_units']))
@@ -71,7 +47,7 @@ class SimpleImdbLstm():
         return model
 
     def objective(self, space):
-        data = load_data(space['top_words'], space['max_word_length'], fraction=0.01)
+        data = load_data(int(space['top_words']), int(space['max_word_length']), fraction=space['data_fraction'])
         model = self.create_model(space)
 
         early_stopping = EarlyStopping(monitor=space['monitor'], patience=1)
@@ -91,4 +67,3 @@ class SimpleImdbLstm():
         loss = results[0]
         acc = results[1]
         return {'loss': loss, 'acc': acc, 'status': STATUS_OK}
-
